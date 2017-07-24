@@ -17,7 +17,7 @@ int main() {
 		exit(EXIT_FAILURE);
 	}
 
-	printf("Network device: %s\n", net_dev);
+	printf("\nNetwork device: %s\n", net_dev);
 
 	rtn = pcap_lookupnet(net_dev, &net, &mask, err_buf);
 	if(rtn == -1) {

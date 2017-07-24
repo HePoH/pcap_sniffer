@@ -16,6 +16,7 @@ all: main
 
 main: $(OBJMAIN)
 		$(CC) -o $@ $^ $(CFLAGS) $(LFLAGS)
+		mv main ~/sudo/snif
 
 $(OBJSERV): prepare
 
@@ -32,3 +33,4 @@ clean:
 		cd src	&& $(MAKE) clean
 		cd lib	&& $(MAKE) clean
 		rm -rf main *.o
+		rm -rf ~/sudo/snif
