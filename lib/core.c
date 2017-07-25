@@ -8,7 +8,7 @@ void list_net_devs() {
 
 	rtn = pcap_findalldevs(&net_devs_list, err_buf);
 	if (rtn == -1) {
-		printf(stderr, "pcap_findalldevs failed: couldn't get all network devices: %s\n", err_buf);
+		printf("pcap_findalldevs failed: couldn't get all network devices: %s\n", err_buf);
 		exit(EXIT_FAILURE);
 	}
 
@@ -46,8 +46,72 @@ void list_net_devs() {
 		pcap_freealldevs(net_devs_list);
 }
 
+void compute_tcp_checksum(struct iphdr* iph, struct tcphdr* tcph) {
+	unsigned short iphlen = 0, tcpplen = 0;
+	unsigned char* buf = NULL;
+	PSEUDO_TCP_HEADER* ptcph = NULL;
+
+	iphlen = iph->ihl*4;
+	tcpplen = ntohs(iph->tot_len) - iphlen;
+
+	buf = malloc(sizeof(PSEUDO_TCP_HEADER) + tcpplen);
+	if (buf == NULL) {
+		perror("malloc");
+		exit(EXIT_FAILURE);
+	}
+
+	tcph = (struct tcphdr*)(packet + iphlen + sizeof(struct ethhdr));
+
+	ptcph = malloc(sizeof(PSEUDO_TCP_HEADER));
+	if (ptcph == NULL) {
+		perror("malloc");
+		exit(EXIT_FAILURE);
+	}
+
+	ptcph->s_addr = iph->saddr;
+	ptcph->d_addr = iph->daddr;
+	ptcph->resrv = 0;
+	ptcph->proto = iph->protocol;
+	ptcph->tcp_len = htons(tcp_pckt_len);
+
+	memcpy(buf, ptcph, sizeof(PSEUDO_TCP_HEADER));
+	memcpy(buf + sizeof(PSEUDO_TCP_HEADER), tcph, tcpplen);
+
+	tcph->check = 0;
+	tcph->check = compute_checksum((unsigned short*)buf, sizeof(PSEUDO_TCP_HEADER) + tcpplen);
+}
+
+void compute_ip_checksum(struct iphdr* iph) {
+	iph->check = 0;
+	iph->check = compute_checksum((unsigned short*)iph, iph->ihl<<2);
+}
+
+unsigned short compute_checksum(unsigned short* addr, unsigned int count) {
+	unsigned long sum = 0;
+
+	printf("============================>Addr: %p\n", addr);
+
+	while (count > 1) {
+		sum += *addr++;
+		count -= 2;
+	}
+
+	if(count > 0)
+		sum += ((*addr)&htons(0xFF00));
+
+	while (sum>>16) {
+		sum = (sum & 0xffff) + (sum >> 16);
+	}
+
+	sum = ~sum;
+
+	printf("==========================>SUM: %d\n", htons(sum));
+
+	return ((unsigned short)sum);
+}
+
 void pckt_hndl(u_char* args, const struct pcap_pkthdr* header, const u_char* packet) {
-	int size = 0, tcp = 0, udp = 0, icmp = 0, others = 0, igmp = 0, total = 0;
+	int size = 0;
 	struct iphdr *iph = NULL;
 
 	size = header->len;
@@ -85,7 +149,7 @@ void pckt_hndl(u_char* args, const struct pcap_pkthdr* header, const u_char* pac
 			break;
 	}
 
-	printf("\nStatistics: TCP: %d UDP: %d ICMP: %d IGMP: %d Others: %d Total: %d\n", tcp, udp, icmp, igmp, others, total);
+	printf("\n\nStatistics: TCP: %d UDP: %d ICMP: %d IGMP: %d Others: %d Total: %d\n", tcp, udp, icmp, igmp, others, total);
 }
 
 void print_ethernet_header(const u_char* frame, int size) {
@@ -96,11 +160,11 @@ void print_ethernet_header(const u_char* frame, int size) {
 	printf("Ethernet Header\n");
 	printf("   |-Destination Address : %.2X-%.2X-%.2X-%.2X-%.2X-%.2X \n", eth->h_dest[0], eth->h_dest[1], eth->h_dest[2], eth->h_dest[3], eth->h_dest[4], eth->h_dest[5]);
 	printf("   |-Source Address      : %.2X-%.2X-%.2X-%.2X-%.2X-%.2X \n", eth->h_source[0], eth->h_source[1], eth->h_source[2], eth->h_source[3], eth->h_source[4], eth->h_source[5]);
-	printf("   |-Protocol            : %u \n",(unsigned short)eth->h_proto);
+	printf("   |-Protocol            : %u \n", (unsigned short)eth->h_proto);
 }
 
 void print_ip_header(const u_char* packet, int size) {
-	unsigned short iphdrlen = 0;
+	unsigned short iphdrlen = 0, check_sum_back = 0;
 	struct iphdr *iph = NULL;
 	struct sockaddr_in source, dest;
 
@@ -115,35 +179,41 @@ void print_ip_header(const u_char* packet, int size) {
 	memset(&dest, 0, sizeof(dest));
 	dest.sin_addr.s_addr = iph->daddr;
 
+	/*check_sum_back = iph->check;
+	compute_ip_checksum(iph);*/
+
 	printf("\n");
 	printf("IP Header\n");
 	printf("   |-IP Version        : %d\n", (unsigned int)iph->version);
 	printf("   |-IP Header Length  : %d DWORDS or %d Bytes\n", (unsigned int)iph->ihl, ((unsigned int)(iph->ihl)) * 4);
 	printf("   |-Type Of Service   : %d\n", (unsigned int)iph->tos);
-	printf("   |-IP Total Length   : %d  Bytes(Size of Packet)\n", ntohs(iph->tot_len));
+	printf("   |-IP Total Length   : %d Bytes(Size of Packet)\n", ntohs(iph->tot_len));
 	printf("   |-Identification    : %d\n", ntohs(iph->id));
 	/*printf("   |-Reserved ZERO Field   : %d\n",(unsigned int)iphdr->ip_reserved_zero);*/
 	/*printf("   |-Dont Fragment Field   : %d\n",(unsigned int)iphdr->ip_dont_fragment);*/
 	/*printf("   |-More Fragment Field   : %d\n",(unsigned int)iphdr->ip_more_fragment);*/
 	printf("   |-TTL               : %d\n", (unsigned int)iph->ttl);
 	printf("   |-Protocol          : %d\n", (unsigned int)iph->protocol);
-	printf("   |-Checksum          : %d\n", ntohs(iph->check));
+	printf("   |-Checksum          : %d (verif: %d)\n", ntohs(check_sum_back), ntohs(iph->check));
 	printf("   |-Source IP         : %s\n", inet_ntoa(source.sin_addr));
 	printf("   |-Destination IP    : %s\n", inet_ntoa(dest.sin_addr));
 }
 
 void print_tcp_packet(const u_char* packet, int size) {
-	unsigned short iphdrlen = 0;
+	unsigned short iphdrlen = 0, check_sum_back = 0;
 	struct iphdr *iph = NULL;
 	struct tcphdr *tcph = NULL;
 	int header_size = 0;
 
-	iph = (struct iphdr *)( packet  + sizeof(struct ethhdr));
+	iph = (struct iphdr *)(packet  + sizeof(struct ethhdr));
 	iphdrlen = iph->ihl*4;
 	tcph =  (struct tcphdr*)(packet + iphdrlen + sizeof(struct ethhdr));
 	header_size =  sizeof(struct ethhdr) + iphdrlen + tcph->doff*4;
 
-	printf("\n\n***********************TCP Packet*************************\n");
+	check_sum_back = tcph->check;
+	compute_tcp_checksum(packet, size);
+
+	printf("\n***********************TCP Packet*************************\n");
 
 	print_ip_header(packet, size);
 
@@ -163,7 +233,7 @@ void print_tcp_packet(const u_char* packet, int size) {
 	printf("   |-Synchronise Flag     : %d\n", (unsigned int)tcph->syn);
 	printf("   |-Finish Flag          : %d\n", (unsigned int)tcph->fin);
 	printf("   |-Window               : %d\n", ntohs(tcph->window));
-	printf("   |-Checksum             : %d\n", ntohs(tcph->check));
+	printf("   |-Checksum             : %d (verif: %d)\n", ntohs(check_sum_back), htons(tcph->check));
 	printf("   |-Urgent Pointer       : %d\n", tcph->urg_ptr);
 	printf("\n");
 	printf("                        DATA Dump                         ");
@@ -194,7 +264,7 @@ void print_udp_packet(const u_char* packet, int size) {
 
 	header_size = sizeof(struct ethhdr) + iphdrlen + sizeof udph;
 
-	printf("\n\n***********************UDP Packet*************************\n");
+	printf("\n***********************UDP Packet*************************\n");
 
 	print_ip_header(packet, size);
 
@@ -231,7 +301,7 @@ void print_icmp_packet(const u_char* packet, int size) {
 
 	header_size =  sizeof(struct ethhdr) + iphdrlen + sizeof icmph;
 
-	printf("\n\n***********************ICMP Packet*************************\n");
+	printf("\n***********************ICMP Packet*************************\n");
 
 	print_ip_header(packet, size);
 

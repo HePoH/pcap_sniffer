@@ -1,7 +1,6 @@
 #ifndef CORE_H
 #define CORE_H
 
-#define __STRICT_ANSI__
 #define _ISOC99_SOURCE
 #define _POSIX_SOURCE
 #define _POSIX_C_SOURCE
@@ -36,6 +35,22 @@
 #include <netinet/ip.h>
 
 #define MAX_SNAP_LEN 65535
+
+typedef struct pseudo_header {
+    u_int32_t s_addr;
+    u_int32_t d_addr;
+    u_int8_t resrv;
+    u_int8_t proto;
+    u_int16_t tcp_len;
+} __attribute__((packed)) PSEUDO_TCP_HEADER;
+
+int tcp, udp, icmp, igmp, others, total;
+
+void list_net_devs();
+
+void compute_ip_checksum(struct iphdr* iphdr);
+void compute_tcp_checksum(const u_char* packet, int size);
+unsigned short compute_checksum(unsigned short* addr, unsigned int count);
 
 void pckt_hndl(u_char *, const struct pcap_pkthdr *, const u_char *);
 void process_ip_packet(const u_char * , int);
